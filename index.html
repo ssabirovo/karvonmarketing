@@ -380,6 +380,8 @@ form{display:grid;gap:16px}
 .opt input:focus-visible + label{outline:3px solid var(--sun);outline-offset:2px}
 .field.invalid .opt label{border-color:rgba(210,69,61,.5)}
 .err{font-size:.82rem;color:var(--bad)}
+.err a{color:inherit;font-weight:700}
+.hp{position:absolute!important;left:-9999px;width:1px;height:1px;overflow:hidden}
 .legend-hint{font-weight:500;color:var(--muted);font-size:.8rem;margin-left:6px}
 .field input.other{margin-top:10px;animation:fadeIn .3s ease both}
 .opt{position:relative}
@@ -715,6 +717,7 @@ form{display:grid;gap:16px}
         <h3>Hamkorlik uchun ariza</h3>
         <p class="sub">Ma’lumotlaringizni qoldiring. Tanlagan muammoingizni oldindan o‘rganib, siz bilan bog‘lanamiz.</p>
         <form id="lead-form" novalidate>
+          <div class="hp" aria-hidden="true"><label for="f-website">Website</label><input id="f-website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
           <div class="field"><label for="f-name">Ismingiz</label><input id="f-name" name="name" type="text" autocomplete="given-name" placeholder="Masalan, Aziz" required aria-describedby="e-name"><span class="err" id="e-name" role="alert"></span></div>
           <div class="field"><label for="f-phone">Telefon raqam</label><div class="phone"><span class="pre">+998</span><input id="f-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel-national" placeholder="90 123 45 67" required aria-describedby="e-phone"></div><span class="err" id="e-phone" role="alert"></span></div>
           <fieldset class="field" id="f-problem">
@@ -768,8 +771,13 @@ var KARVON_CONFIG = {
   telegram: "https://t.me/karvonmarketinguz",
   instagram: "https://www.instagram.com/karvonmarketing/",
   linkedin: "", email: "",
-  formEndpoint: ""  // CRM webhook yoki bot backend URL
+  formEndpoint: "https://script.google.com/macros/s/AKfycbzbQQRIOyZ4hu0mWofwQ0MbnDCy77JWOFZEOix_x0Kroe_N5lPaJsmybHoKyW31f0-0/exec",  // Google Apps Script web app URL (build.py endpoint.txt dan qo‘yadi)
+  previewMode: false        // true faqat claude.ai ko‘rinishida: ariza hech qayerga ketmaydi
 };
+
+/* ===== UTM va manba (arizaga qo‘shiladi) ===== */
+var UTM = (function(){ var o = {}; try { var q = new URLSearchParams(location.search); ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','gclid','fbclid'].forEach(function(k){ var v = q.get(k); if (v) o[k] = v.slice(0,200); }); } catch(e){} return o; })();
+var REF = (document.referrer || '').slice(0,300);
 
 /* ===== Analytics (GTM / GA4 dataLayer) ===== */
 window.dataLayer = window.dataLayer || [];
@@ -1001,9 +1009,9 @@ track('page_view', { page_title: document.title });
       $('#g-txt').textContent = 'oyiga qo‘shimcha tushum, xuddi shu reklama budjetidan (+' + int(extra) + ' mijoz)';
       if (prevGain !== null && Math.round(prevGain) !== Math.round(gain)) bump($('#gain'));
       prevGain = gain;
-      window.KARVON_CALC = { budget: B, leads: L, conversion_pct: Math.round(c*100), avg_check: A };
+      if (used) window.KARVON_CALC = { budget: B, leads: L, conversion_pct: Math.round(c*100), avg_check: A };
     }
-    ids.forEach(function(k){ el[k].addEventListener('input', function(){ calc(); if (!used){ used = true; track('calculator_use'); } }); });
+    ids.forEach(function(k){ el[k].addEventListener('input', function(){ if (!used){ used = true; track('calculator_use'); } calc(); }); });
     calc();
   })();
 
@@ -1058,14 +1066,26 @@ track('page_view', { page_title: document.title });
   form.addEventListener('submit', function(e){
     e.preventDefault(); form.dataset.tried = '1';
     var v = validate(); if (!v.ok){ v.first.focus(); return; }
-    var data = { name: $('#f-name').value.trim(), phone: '+998' + phone.value.replace(/\D/g,''), problems: Array.prototype.map.call(form.querySelectorAll('input[name=problem]:checked'), function(x){ return x.value === 'Boshqa' ? 'Boshqa: ' + $('#f-other').value.trim() : x.value; }), page: location.href, submitted_at: new Date().toISOString(), calculator: window.KARVON_CALC || null };
-    var btn = $('#f-submit'); btn.disabled = true; btn.textContent = 'Yuborilmoqda…';
+    if (form.website && form.website.value){ return; } // spam bot (honeypot)
+    var data = {
+      name: $('#f-name').value.trim(),
+      phone: '+998' + phone.value.replace(/\D/g,''),
+      problems: Array.prototype.map.call(form.querySelectorAll('input[name=problem]:checked'), function(x){ return x.value === 'Boshqa' ? 'Boshqa: ' + $('#f-other').value.trim() : x.value; }),
+      calculator: window.KARVON_CALC || null,
+      utm: UTM, referrer: REF,
+      page: location.href, submitted_at: new Date().toISOString()
+    };
+    var btn = $('#f-submit'), btnHTML = btn.innerHTML; btn.disabled = true; btn.textContent = 'Yuborilmoqda…';
     function done(){ track('form_submit', { conversion: true, form_id: 'audit_lead', problems: data.problems.join(' | ') }); track('generate_lead'); $('#form-view').hidden = true; var s = $('#success'); s.hidden = false; s.focus(); }
+    function fail(msg){ btn.disabled = false; btn.innerHTML = btnHTML; $('#e-problem').innerHTML = msg || 'Ariza yuborilmadi. Internetni tekshirib, qayta urinib ko‘ring yoki <a href="' + C.telegram + '" target="_blank" rel="noopener">Telegram orqali yozing</a>.'; track('form_error', { reason: 'send_failed' }); }
     if (C.formEndpoint){
-      fetch(C.formEndpoint, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(data) })
-        .then(function(r){ if (!r.ok) throw new Error(r.status); done(); })
-        .catch(function(){ btn.disabled = false; btn.textContent = 'Qayta yuborish'; $('#e-problem').textContent = 'Ariza yuborilmadi. Internetni tekshirib, qayta urinib ko‘ring yoki telefon orqali bog‘laning.'; });
-    } else setTimeout(done, 500);
+      /* text/plain: Google Apps Script bilan CORS preflight'siz ishlaydi */
+      fetch(C.formEndpoint, { method:'POST', headers:{ 'Content-Type':'text/plain;charset=utf-8' }, body: JSON.stringify(data) })
+        .then(function(r){ return r.json(); })
+        .then(function(j){ if (j && j.ok) done(); else fail(); })
+        .catch(function(){ fail(); });
+    } else if (C.previewMode){ setTimeout(done, 500); }
+    else { fail('Forma hali ulanmagan. Iltimos, <a href="' + C.telegram + '" target="_blank" rel="noopener">Telegram orqali yozing</a>.'); }
   });
 })();
 </script>
